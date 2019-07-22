@@ -1,3 +1,6 @@
+#[warn(clippy::pedantic)]
+#[warn(clippy::nursery)]
+#[warn(clippy::cargo)]
 macro_rules! prints {
     ($str:expr) => {
         print!("{}", $str);
@@ -7,10 +10,10 @@ macro_rules! prints {
 fn path() -> String {
     use std::env::{current_dir, var};
     let home_symbol: String = String::from("~");
-    let home: String = var("HOME").unwrap_or(home_symbol.clone());
+    let home: String = var("HOME").unwrap_or_else(|_| home_symbol.clone());
     let cwd: String = current_dir()
         .map(|x| String::from(x.to_string_lossy()))
-        .unwrap_or(String::from("unknown"));
+        .unwrap_or_else(|_| String::from("unknown"));
     cwd.replace(&home, &home_symbol)
 }
 
@@ -31,7 +34,7 @@ fn git() -> Result<(String, String), failure::Error> {
         let head = repo.head()?;
         let head_name = head
             .shorthand()
-            .ok_or(failure::err_msg("Somehow, HEAD doesn't have a shorthand"))?;
+            .ok_or_else(|| failure::err_msg("Somehow, HEAD doesn't have a shorthand"))?;
         let workspace_id = if head_name == "HEAD" {
             head.peel_to_commit()?
                 .id()
@@ -40,7 +43,7 @@ fn git() -> Result<(String, String), failure::Error> {
                 .map(|x| format!("{:02x}", x))
                 .fold(String::new(), |acc, x| acc + &x)
                 .get(..7)
-                .ok_or(failure::err_msg("Didn't get OID to hex"))?
+                .ok_or_else(|| failure::err_msg("Didn't get OID to hex"))?
                 .to_string()
         } else {
             String::from(head_name)
@@ -98,8 +101,8 @@ fn git() -> Result<(String, String), failure::Error> {
         Ok(diff)
     }
     Ok((
-        git_branch_seg(&repo).unwrap_or(String::from("UNKNOWN")),
-        git_diff_seg(&repo).unwrap_or(String::new()),
+        git_branch_seg(&repo).unwrap_or_else(|_| String::from("UNKNOWN")),
+        git_diff_seg(&repo).unwrap_or_default(),
     ))
 }
 
