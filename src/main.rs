@@ -56,7 +56,11 @@ fn git() -> Result<(String, String), failure::Error> {
         use colorful::Style::Bold;
         use git2::Status;
         let ((inew, imod, idel), (wnew, wmod, wdel), conf) = repo
-            .statuses(Some(git2::StatusOptions::new().update_index(true)))?
+            .statuses(Some(
+                git2::StatusOptions::new()
+                    .update_index(true)
+                    .include_untracked(true),
+            ))?
             .iter()
             .fold(
                 ((0, 0, 0), (0, 0, 0), 0),
