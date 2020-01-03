@@ -1,6 +1,6 @@
 [package]
 name = "colorlyne"
-version = "0.1.1"
+version = "1.0.0"
 authors = ["0xadd1e"]
 edition = "2018"
 description = "A simple statusline with git support"
