@@ -11,6 +11,4 @@ repository = "https://github.com/0xADD1E/ColorLyne"
 
 [dependencies]
 colorful = "0.2"
-failure = "0.1"
 git2 = "0.9"
-base64 = "0.10"

@@ -9,12 +9,15 @@ macro_rules! prints {
 
 fn path() -> String {
     use std::env::{current_dir, var};
-    let home_symbol: String = String::from("~");
-    let home: String = var("HOME").unwrap_or_else(|_| home_symbol.clone());
     let cwd: String = current_dir()
         .map(|x| String::from(x.to_string_lossy()))
         .unwrap_or_else(|_| String::from("unknown"));
-    cwd.replace(&home, &home_symbol)
+
+    if let Ok(home) = var("HOME") {
+        cwd.replace(&home, "~")
+    } else {
+        cwd
+    }
 }
 
 fn arrow_color() -> colorful::Color {
@@ -28,29 +31,34 @@ fn arrow_color() -> colorful::Color {
     }
 }
 
-fn git() -> Result<(String, String), failure::Error> {
+fn git() -> Result<(String, String), git2::Error> {
     let repo = git2::Repository::open_from_env()?;
-    fn git_branch_seg(repo: &git2::Repository) -> Result<String, failure::Error> {
-        let head = repo.head()?;
-        let head_name = head
-            .shorthand()
-            .ok_or_else(|| failure::err_msg("Somehow, HEAD doesn't have a shorthand"))?;
-        let workspace_id = if head_name == "HEAD" {
-            head.peel_to_commit()?
-                .id()
-                .as_bytes()
-                .iter()
-                .map(|x| format!("{:02x}", x))
-                .fold(String::new(), |acc, x| acc + &x)
-                .get(..7)
-                .ok_or_else(|| failure::err_msg("Didn't get OID to hex"))?
-                .to_string()
-        } else {
-            String::from(head_name)
-        };
-        Ok(workspace_id)
+    fn git_commit_id(commit: git2::Commit) -> String {
+        commit
+            .id()
+            .as_bytes()
+            .iter()
+            .map(|x| format!("{:02x}", x))
+            .fold(String::new(), |acc, x| acc + &x)
+            .get(..7)
+            .unwrap_or_else(|| "UNKNOWN")
+            .into()
     }
-    fn git_diff_seg(repo: &git2::Repository) -> Result<String, failure::Error> {
+    fn git_branch_seg(repo: &git2::Repository) -> Result<String, git2::Error> {
+        let head = repo.head()?;
+        let pretty_name = if let Some(head_name) = head.shorthand() {
+            if head_name == "HEAD" {
+                //We're *somewhere* so let's just put the short id
+                git_commit_id(head.peel_to_commit()?)
+            } else {
+                String::from(head_name)
+            }
+        } else {
+            String::from("UNKNOWN")
+        };
+        Ok(pretty_name)
+    }
+    fn git_diff_seg(repo: &git2::Repository) -> Result<String, git2::Error> {
         use colorful::Color::{Green, Magenta, Red, Yellow};
         use colorful::Colorful;
         use colorful::Style::Bold;
@@ -110,7 +118,7 @@ fn git() -> Result<(String, String), failure::Error> {
     ))
 }
 
-fn main() -> Result<(), failure::Error> {
+fn main() {
     use colorful::{Color, Colorful};
 
     let path_seg = format!("<{}>", path());
@@ -126,6 +134,4 @@ fn main() -> Result<(), failure::Error> {
     }
 
     prints!("-> ".color(arrow_color()));
-
-    Ok(())
 }
