@@ -7,6 +7,16 @@ macro_rules! prints {
     };
 }
 
+fn toolbox() -> String {
+    use std::env::var;
+    if let Ok(hostname) = var("HOSTNAME") {
+        if hostname == "toolbox" {
+            return String::from("⚙ ");
+        }
+    }
+    String::default()
+}
+
 fn path() -> String {
     use std::env::{current_dir, var};
     let cwd: String = current_dir()
@@ -120,6 +130,8 @@ fn git() -> Result<(String, String), git2::Error> {
 
 fn main() {
     use colorful::{Color, Colorful};
+
+    prints!(toolbox());
 
     let path_seg = format!("<{}>", path());
     prints!(path_seg.color(Color::Cyan));
