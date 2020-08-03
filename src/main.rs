@@ -41,91 +41,197 @@ fn arrow_color() -> colorful::Color {
     }
 }
 
-fn git() -> Result<(String, String), git2::Error> {
-    let repo = git2::Repository::open_from_env()?;
-    fn git_commit_id(commit: git2::Commit) -> String {
-        commit
-            .id()
-            .as_bytes()
-            .iter()
-            .map(|x| format!("{:02x}", x))
-            .fold(String::new(), |acc, x| acc + &x)
-            .get(..7)
-            .unwrap_or_else(|| "UNKNOWN")
-            .into()
+fn git() -> (String, String) {
+    #[derive(Default)]
+    struct GitFileInfo {
+        pub modified: i64,
+        pub added: i64,
+        pub deleted: i64,
+        pub copied: i64,
     }
-    fn git_branch_seg(repo: &git2::Repository) -> Result<String, git2::Error> {
-        let head = repo.head()?;
-        let pretty_name = if let Some(head_name) = head.shorthand() {
-            if head_name == "HEAD" {
-                //We're *somewhere* so let's just put the short id
-                git_commit_id(head.peel_to_commit()?)
-            } else {
-                String::from(head_name)
-            }
-        } else {
-            String::from("UNKNOWN")
-        };
-        Ok(pretty_name)
-    }
-    fn git_diff_seg(repo: &git2::Repository) -> Result<String, git2::Error> {
-        use colorful::Color::{Green, Magenta, Red, Yellow};
-        use colorful::Colorful;
-        use colorful::Style::Bold;
-        use git2::Status;
-        let ((inew, imod, idel), (wnew, wmod, wdel), conf) = repo
-            .statuses(Some(
-                git2::StatusOptions::new()
-                    .update_index(true)
-                    .include_untracked(true),
-            ))?
-            .iter()
-            .fold(
-                ((0, 0, 0), (0, 0, 0), 0),
-                |((inew, imod, idel), (wnew, wmod, wdel), conf), x| match x.status() {
-                    Status::INDEX_NEW => ((inew + 1, imod, idel), (wnew, wmod, wdel), conf),
-                    Status::INDEX_MODIFIED => ((inew, imod + 1, idel), (wnew, wmod, wdel), conf),
-                    Status::INDEX_RENAMED => ((inew, imod + 1, idel), (wnew, wmod, wdel), conf),
-                    Status::INDEX_TYPECHANGE => ((inew, imod + 1, idel), (wnew, wmod, wdel), conf),
-                    Status::INDEX_DELETED => ((inew, imod, idel + 1), (wnew, wmod, wdel), conf),
-                    Status::WT_NEW => ((inew, imod, idel), (wnew + 1, wmod, wdel), conf),
-                    Status::WT_MODIFIED => ((inew, imod, idel), (wnew, wmod + 1, wdel), conf),
-                    Status::WT_RENAMED => ((inew, imod, idel), (wnew, wmod + 1, wdel), conf),
-                    Status::WT_TYPECHANGE => ((inew, imod, idel), (wnew, wmod + 1, wdel), conf),
-                    Status::WT_DELETED => ((inew, imod, idel), (wnew, wmod, wdel + 1), conf),
-                    Status::CONFLICTED => ((inew, imod, idel), (wnew, wmod, wdel), conf + 1),
-                    _ => ((inew, imod, idel), (wnew, wmod, wdel), conf),
+    impl GitFileInfo {
+        fn add(self, chr: &char) -> Self {
+            match chr {
+                'M' => Self {
+                    modified: self.modified + 1,
+                    ..self
                 },
-            );
-
-        let mut diff = String::new();
-        if inew > 0 {
-            diff = format!("{}{}", diff, format!("+{}", inew).color(Green).style(Bold));
+                'A' => Self {
+                    added: self.added + 1,
+                    ..self
+                },
+                'D' => Self {
+                    deleted: self.deleted + 1,
+                    ..self
+                },
+                'R' | 'C' => Self {
+                    copied: self.copied + 1,
+                    ..self
+                },
+                _ => self,
+            }
         }
-        if imod > 0 {
-            diff = format!("{}{}", diff, format!("~{}", imod).color(Yellow).style(Bold));
-        }
-        if idel > 0 {
-            diff = format!("{}{}", diff, format!("-{}", idel).color(Red).style(Bold));
-        }
-        if wnew > 0 {
-            diff = format!("{}{}", diff, format!("+{}", wnew).color(Green));
-        }
-        if wmod > 0 {
-            diff = format!("{}{}", diff, format!("~{}", wmod).color(Yellow));
-        }
-        if wdel > 0 {
-            diff = format!("{}{}", diff, format!("-{}", wdel).color(Red));
-        }
-        if conf > 0 {
-            diff = format!("{}{}", diff, format!("!{}", conf).color(Magenta));
-        }
-        Ok(diff)
     }
-    Ok((
-        git_branch_seg(&repo).unwrap_or_else(|_| String::from("UNKNOWN")),
-        git_diff_seg(&repo).unwrap_or_default(),
-    ))
+    #[derive(Default)]
+    struct GitInfo {
+        pub staged: GitFileInfo,
+        pub unstaged: GitFileInfo,
+        pub unmerged: i64,
+        pub untracked: i64,
+
+        //Branch info
+        pub ahead: i64,
+        pub behind: i64,
+        pub oid: String,
+        pub head: String,
+        pub upstream: String,
+    }
+    impl GitInfo {
+        fn add(self, line: &str) -> Self {
+            let mut words = line.split_whitespace();
+            let scan_word = words.next().unwrap_or("_");
+            match scan_word.chars().nth(0).unwrap() {
+                'f' => Self {
+                    head: String::from("FATAL"),
+                    ..self
+                }, //git failed to get info
+                'u' => Self {
+                    unmerged: self.unmerged + 1,
+                    ..self
+                },
+                '?' => Self {
+                    untracked: self.untracked + 1,
+                    ..self
+                },
+                '1' | '2' => {
+                    let chars: Vec<char> = words.next().unwrap().chars().collect();
+                    Self {
+                        staged: self.staged.add(&chars[0]),
+                        unstaged: self.unstaged.add(&chars[1]),
+                        ..self
+                    }
+                }
+                '#' => match words.next().unwrap() {
+                    "branch.oid" => Self {
+                        oid: String::from(words.next().unwrap()),
+                        ..self
+                    },
+                    "branch.head" => Self {
+                        head: String::from(words.next().unwrap()),
+                        ..self
+                    },
+                    "branch.upstream" => Self {
+                        upstream: String::from(words.next().unwrap()),
+                        ..self
+                    },
+                    "branch.ab" => Self {
+                        ahead: words
+                            .next()
+                            .unwrap()
+                            .strip_prefix('+')
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                        behind: words
+                            .next()
+                            .unwrap()
+                            .strip_prefix('-')
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                        ..self
+                    },
+                    _ => self,
+                },
+                '_' => self,
+                _ => self,
+            }
+        }
+    }
+    //get output
+    let output = std::process::Command::new("git")
+        .args(&["status", "--branch", "--porcelain=v2"])
+        .output()
+        .map(|a| a.stdout)
+        .unwrap_or("fatal: git failed to run".bytes().collect());
+    let info: GitInfo = String::from_utf8_lossy(&output)
+        .lines()
+        .fold(GitInfo::default(), |info, line| info.add(line));
+
+    use colorful::Color::{Green, LightGray, Magenta, Red, Yellow};
+    use colorful::Colorful;
+    use colorful::Style::Bold;
+    let mut diff_seg = String::new();
+    if info.untracked > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("+{}", info.untracked).color(LightGray)
+        );
+    }
+    if info.staged.added > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("+{}", info.staged.added).color(Green).style(Bold)
+        );
+    }
+    if info.staged.modified > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("~{}", info.staged.modified)
+                .color(Yellow)
+                .style(Bold)
+        );
+    }
+    if info.staged.deleted > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("-{}", info.staged.deleted).color(Red).style(Bold)
+        );
+    }
+    if info.unstaged.added > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("+{}", info.unstaged.added).color(Green)
+        );
+    }
+    if info.unstaged.modified > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("~{}", info.unstaged.modified).color(Yellow)
+        );
+    }
+    if info.unstaged.deleted > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("-{}", info.unstaged.deleted).color(Red)
+        );
+    }
+    if info.unmerged > 0 {
+        diff_seg = format!(
+            "{}{}",
+            diff_seg,
+            format!("!{}", info.unmerged).color(Magenta)
+        );
+    }
+    if info.ahead > 0 {
+        diff_seg = format!("{}{}", diff_seg, format!("↑{}", info.ahead))
+    }
+    if info.behind > 0 {
+        diff_seg = format!("{}{}", diff_seg, format!("↓{}", info.behind))
+    }
+    let branch_seg = if info.head != "" {
+        info.head
+    } else {
+        String::from(info.oid.split_at(8).0)
+    };
+    (branch_seg, diff_seg)
 }
 
 fn main() {
@@ -136,13 +242,12 @@ fn main() {
     let path_seg = format!("<{}>", path());
     prints!(path_seg.color(Color::Cyan));
 
-    if let Ok((branch, diff)) = git() {
-        let branch_seg = format!("<{}>", branch);
-        prints!(branch_seg.color(Color::Violet));
+    let (branch, diff) = git();
+    let branch_seg = format!("<{}>", branch);
+    prints!(branch_seg.color(Color::Violet));
 
-        if diff != "" {
-            print!("<{}>", diff);
-        }
+    if diff != "" {
+        print!("<{}>", diff);
     }
 
     prints!("-> ".color(arrow_color()));
